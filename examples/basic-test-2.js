@@ -11,8 +11,12 @@ const fsm = new RxFSM({ states });
 
 fsm.init();
 
-fsm.state$.subscribe((state) => {
-	console.log('sub', state);
+fsm.on('FOO').subscribe(() => {
+	console.log('foo state');
+});
+
+fsm.on('END').subscribe(() => {
+	console.log('end state');
 });
 
 fsm.trigger('foo');

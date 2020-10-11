@@ -1,1 +1,4 @@
-export * from "./rxfsm/rsfsm";
+export * from './rxfsm/RxFSM';
+export * from './rxfsm/RxFSMConfig';
+export * from './rxfsm/RxState';
+export * from './rxfsm/RxTransition';

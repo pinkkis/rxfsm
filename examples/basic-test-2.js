@@ -1,4 +1,4 @@
-const { RxFSM } = require('../dist');
+const { RxFSM } = require('../dist/cjs');
 
 const states = [
 	{ name: 'DEFAULT', onEnter: () => console.log('enter DEFAULT'), onExit: () => console.log('exit DEFAULT'), transitions: [{ event: 'foo', target: 'FOO' }, { event: 'bar', target: 'BAR' }] },

@@ -1,19 +1,21 @@
-import { BehaviorSubject, Observable, of } from 'rxjs';
-import { filter, share } from 'rxjs/operators';
+import { BehaviorSubject, Observable } from 'rxjs';
+import { filter, pairwise, share } from 'rxjs/operators';
 import { RxFSMConfig } from './RxFSMConfig';
 import { RxState } from './RxState';
-import { RxTransition } from './RxTransition';
+import { RxStateContext } from './RxStateContext';
+import { RxAction } from './RxAction';
 
 const defaultConfig: RxFSMConfig = {
 	initialState: 'DEFAULT',
 	debug: false,
+	ctx: {},
 };
 
 export class RxFSM {
-	private internalState$ = new BehaviorSubject<string>('');
+	private internalState$!: BehaviorSubject<string>;
 	private states = new Map<string, RxState>();
-	private currentTransitions: RxTransition[] = [];
 	private config: RxFSMConfig;
+	private rootCtx: RxStateContext = {};
 
 	public state$ = new Observable<string>();
 
@@ -21,8 +23,12 @@ export class RxFSM {
 		return this.getState(this.internalState$.value) as RxState;
 	}
 
-	get availableTransitions(): RxTransition[] {
-		return this.currentState.transitions;
+	get ctx(): RxStateContext {
+		return { ...this.rootCtx };
+	}
+
+	get availableTransitions(): RxAction[] {
+		return this.currentState.actions;
 	}
 
 	constructor(options: Partial<RxFSMConfig> = defaultConfig) {
@@ -42,13 +48,9 @@ export class RxFSM {
 			throw new Error('The default state does not exist, add that state before initializing');
 		}
 
-		if (this.internalState$) {
-			this.internalState$.complete();
-		}
-
-		const intialState = this.getState(this.config.initialState) as RxState;
-		this.currentTransitions = intialState.transitions;
-		this.internalState$ = new BehaviorSubject(intialState.name);
+		this.internalState$ = new BehaviorSubject('');
+		this.internalState$.pipe(pairwise()).subscribe(([prev, curr]) => this.onInternalStateTransition(prev, curr));
+		this.internalState$.next(this.config.initialState);
 		this.state$ = this.internalState$.asObservable().pipe(share());
 	}
 
@@ -66,16 +68,23 @@ export class RxFSM {
 	}
 
 	on(stateName: string): Observable<string> {
-		if (this.states.has(stateName)) {
-			return this.state$.pipe(filter((state) => state === stateName));
-		}
-
-		return of();
+		return this.state$.pipe(filter((state) => state === stateName));
 	}
 
-	trigger(eventName: string): RxFSM {
-		if (this.currentTransitions.map((ct) => ct.event).includes(eventName)) {
-			this.transitionState(this.currentTransitions.find((ct) => ct.event === eventName)?.target as string);
+	trigger(eventName: string, data?: unknown): RxFSM {
+		const validActions = this.currentState.actions.filter((ct) => ct.event === eventName);
+		if (validActions.map((ct) => ct.event).includes(eventName)) {
+			const transitionState = validActions.find((ct) => ct.event === eventName)?.target as string;
+
+			validActions
+				.filter((vt) => vt.action)
+				.forEach((action) =>
+					action.action?.call(this, this.currentState.ctx as RxStateContext, this.rootCtx, data)
+				);
+
+			if (transitionState) {
+				this.transitionState(transitionState);
+			}
 		}
 
 		return this;
@@ -85,11 +94,18 @@ export class RxFSM {
 		const existingStates = Array.from(this.states.keys());
 		const newStates = states.map((s) => s.name);
 		const stateNames = new Set(existingStates.concat(newStates));
-		const targets = new Set(states.flatMap((state) => state.transitions.map((transition) => transition.target)));
+		const targets = new Set(
+			states.flatMap((state) => state.actions.map((action) => action?.target).filter(Boolean))
+		);
 
 		targets.forEach((target) => {
-			if (!stateNames.has(target)) {
-				throw new Error(`States have a target state "${target}" that does not exist`);
+			if (!stateNames.has(target as string)) {
+				throw new Error(
+					`States [${states
+						.filter((state) => state.actions.map((a) => a?.target).includes(target))
+						.map((state) => state.name)
+						.join(',')}] have a target state "${target}" that does not exist`
+				);
 			}
 		});
 	}
@@ -103,21 +119,23 @@ export class RxFSM {
 	}
 
 	private transitionState(toStateName: string): RxFSM {
-		const toState = this.getState(toStateName);
-
-		if (!toState) {
+		if (!this.states.has(toStateName)) {
 			throw new Error(`To state "${toStateName}" does not exist`);
 		}
 
-		if (!this.currentTransitions.map((ct) => ct.target).includes(toStateName)) {
+		if (!this.currentState.actions.map((action) => action.target).includes(toStateName)) {
 			throw new Error(`State "${this.currentState.name}" cannot transition to state "${toStateName}".`);
 		}
 
-		this.currentState.onExit.call(this, toStateName);
-		toState.onEnter.call(this, this.currentState.name);
-		this.currentTransitions = toState.transitions;
 		this.internalState$.next(toStateName);
 
 		return this;
+	}
+
+	private onInternalStateTransition(prev: string, curr: string): void {
+		const prevState = this.getState(prev) as RxState;
+
+		prevState?.onExit.call(this, curr, prevState.ctx as RxStateContext, this.rootCtx);
+		this.currentState.onEnter.call(this, prev, this.currentState.ctx as RxStateContext, this.rootCtx);
 	}
 }
